@@ -16,6 +16,7 @@ import { RelayService } from './services/relayService';
 import { createStellarSubmitterFromEnv } from './services/stellarSubmitter';
 import { createAuthMiddleware } from './middleware/auth';
 import { createAccountRateLimiterMiddleware } from './middleware/accountRateLimiter';
+import { createRouteRateLimiter } from './middleware/routeRateLimiter';
 import { createIdempotencyMiddleware } from './middleware/idempotency';
 import { createPayloadGuardMiddleware } from './middleware/payloadGuard';
 import { createContentTypeGuardMiddleware } from './middleware/contentTypeGuard';
@@ -171,6 +172,10 @@ export function createApp(
   });
 
   const accountLimiter = createAccountRateLimiterMiddleware();
+  const executeRouteLimiter = createRouteRateLimiter('/relay/execute');
+  const validateRouteLimiter = createRouteRateLimiter('/relay/validate');
+  const statusRouteLimiter = createRouteRateLimiter('/relay/status');
+  const healthRouteLimiter = createRouteRateLimiter('/health');
 
   const statusLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -223,14 +228,25 @@ export function createApp(
     auth,
     contentTypeGuard,
     relayLimiter,
+    executeRouteLimiter,
     accountLimiter,
     validate,
     idempotency,
     executeHandler
   );
-  app.post('/relay/validate', auth, contentTypeGuard, relayLimiter, validate, validateHandler);
-  app.get('/relay/status', statusLimiter, (_req, res) => res.json(relayService.health()));
-  app.get('/health', healthHandler);
+  app.post(
+    '/relay/validate',
+    auth,
+    contentTypeGuard,
+    relayLimiter,
+    validateRouteLimiter,
+    validate,
+    validateHandler
+  );
+  app.get('/relay/status', statusLimiter, statusRouteLimiter, (_req, res) =>
+    res.json(relayService.health())
+  );
+  app.get('/health', healthRouteLimiter, healthHandler);
   app.get('/metrics', (_req, res) => {
     res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.send(renderPrometheusMetrics());
