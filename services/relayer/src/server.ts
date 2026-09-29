@@ -235,19 +235,9 @@ export function createApp(
     idempotency,
     executeHandler
   );
-  app.post(
-    '/relay/validate',
-    auth,
-    contentTypeGuard,
-    relayLimiter,
-    validateRouteLimiter,
-    validate,
-    validateHandler
-  );
-  app.get('/relay/status', statusLimiter, statusRouteLimiter, (_req, res) =>
-    res.json(relayService.health())
-  );
-  app.get('/health', healthRouteLimiter, healthHandler);
+  app.post('/relay/validate', auth, contentTypeGuard, relayLimiter, validate, validateHandler);
+  app.get('/relay/status', statusLimiter, healthHandler);
+  app.get('/health', healthHandler);
   app.get('/metrics', (_req, res) => {
     res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.send(renderPrometheusMetrics());
