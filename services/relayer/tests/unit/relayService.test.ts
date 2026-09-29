@@ -109,6 +109,57 @@ describe('RelayService', () => {
       expect(result.error?.code).toBe('NONCE_REPLAY');
       expect(result.error?.message).toBe('Nonce already used');
     });
+
+    it('rejects a step-up amount until the caller confirms it', async () => {
+      const svc = new RelayService(makeSignatureService(true));
+      const result = await svc.validateRelay(
+        makeRequest({
+          transferPolicy: {
+            amount: 500,
+            todayTotal: 0,
+            policy: { dailyLimit: 1000, stepUpThreshold: 250 },
+          },
+        })
+      );
+      expect(result.valid).toBe(false);
+      expect(result.requiresStepUp).toBe(true);
+      expect(result.error?.code).toBe('POLICY_DENIED');
+      expect(result.error?.message).toContain('additional confirmation');
+    });
+
+    it('accepts a step-up amount after explicit confirmation', async () => {
+      const svc = new RelayService(makeSignatureService(true));
+      const result = await svc.validateRelay(
+        makeRequest({
+          transferPolicy: {
+            amount: 500,
+            todayTotal: 0,
+            policy: { dailyLimit: 1000, stepUpThreshold: 250 },
+            stepUpConfirmed: true,
+          },
+        })
+      );
+      expect(result.valid).toBe(true);
+      expect(result.requiresStepUp).toBeUndefined();
+      expect(result.error).toBeUndefined();
+    });
+
+    it('still blocks amounts over the daily limit', async () => {
+      const svc = new RelayService(makeSignatureService(true));
+      const result = await svc.validateRelay(
+        makeRequest({
+          transferPolicy: {
+            amount: 500,
+            todayTotal: 600,
+            policy: { dailyLimit: 1000, stepUpThreshold: 250 },
+            stepUpConfirmed: true,
+          },
+        })
+      );
+      expect(result.valid).toBe(false);
+      expect(result.requiresStepUp).toBeUndefined();
+      expect(result.error?.code).toBe('POLICY_DENIED');
+    });
   });
 
   describe('executeRelay', () => {
@@ -143,6 +194,36 @@ describe('RelayService', () => {
       const r2 = await svc.executeRelay(req);
       expect(r2.success).toBe(false);
       expect(r2.error?.code).toBe('NONCE_REPLAY');
+    });
+
+    it('does not execute a step-up transfer until it is confirmed', async () => {
+      const svc = new RelayService(makeSignatureService(true), undefined, undefined, undefined, {
+        useMockSubmission: true,
+      });
+      const unconfirmed = await svc.executeRelay(
+        makeRequest({
+          transferPolicy: {
+            amount: 500,
+            todayTotal: 0,
+            policy: { dailyLimit: 1000, stepUpThreshold: 250 },
+          },
+        })
+      );
+      expect(unconfirmed.success).toBe(false);
+      expect(unconfirmed.error?.code).toBe('POLICY_DENIED');
+
+      const confirmed = await svc.executeRelay(
+        makeRequest({
+          nonce: 2,
+          transferPolicy: {
+            amount: 500,
+            todayTotal: 0,
+            policy: { dailyLimit: 1000, stepUpThreshold: 250 },
+            stepUpConfirmed: true,
+          },
+        })
+      );
+      expect(confirmed.success).toBe(true);
     });
 
     it('returns network transaction hash from submitter on valid request', async () => {

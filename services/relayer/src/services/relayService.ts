@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
-import { validateTransferPolicy } from '@ancore/types';
+import { validateTransferPolicyConstraints } from '../validation/transferPolicy';
 import { getSessionKey } from '@ancore/account-abstraction';
 import { rpc } from '@stellar/stellar-sdk';
 import { getEnv } from '../config/env';
@@ -136,16 +136,26 @@ export class RelayService implements RelayServiceContract {
         }
 
         if (request.transferPolicy) {
-          const { policy, amount, todayTotal, assetCode } = request.transferPolicy;
-          const policyResult = validateTransferPolicy(amount, todayTotal, policy, assetCode);
-          if (policyResult.action === 'block') {
-            const error: RelayError = {
+          const { policy, amount, todayTotal, assetCode, stepUpConfirmed } = request.transferPolicy;
+          const policyCheck = validateTransferPolicyConstraints({
+            amount,
+            todayTotal,
+            policy,
+            assetCode,
+            stepUpConfirmed,
+          });
+          if (!policyCheck.valid || policyCheck.requiresStepUp) {
+            const error: RelayError = policyCheck.error ?? {
               code: RelayErrorCodes.POLICY_DENIED,
-              message: policyResult.message,
+              message: 'This transfer requires additional confirmation.',
             };
             span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
             span.setAttribute('error.code', error.code);
-            return { valid: false, error };
+            return {
+              valid: false,
+              requiresStepUp: policyCheck.requiresStepUp,
+              error,
+            };
           }
         }
 
@@ -159,8 +169,15 @@ export class RelayService implements RelayServiceContract {
 
   async executeRelay(request: RelayExecuteRequest): Promise<RelayExecuteResponse> {
     const validation = await this.validateRelay(request);
-    if (!validation.valid) {
-      return { success: false, error: validation.error, gasUsed: 0 };
+    if (!validation.valid || validation.requiresStepUp) {
+      return {
+        success: false,
+        error: validation.error ?? {
+          code: RelayErrorCodes.POLICY_DENIED,
+          message: 'This transfer requires additional confirmation.',
+        },
+        gasUsed: 0,
+      };
     }
 
     if (this.nonceStore) {

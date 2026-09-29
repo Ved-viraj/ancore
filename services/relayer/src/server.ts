@@ -77,6 +77,7 @@ const relayRequestSchema = z.object({
       policy: TransferPolicySchema,
       amount: z.number(),
       todayTotal: z.number(),
+      stepUpConfirmed: z.boolean().optional(),
     })
     .optional(),
 });
