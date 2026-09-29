@@ -14,6 +14,7 @@ import type {
   RelayServiceOptions,
   RelayExecuteRequest,
   RelayExecuteResponse,
+  RelayExecutionOptions,
   ValidationResult,
   HealthResponse,
   DependencyStatus,
@@ -51,7 +52,10 @@ export class RelayService implements RelayServiceContract {
     this.useMockSubmission = isMockSubmissionEnabled(options);
   }
 
-  async validateRelay(request: RelayExecuteRequest): Promise<ValidationResult> {
+  async validateRelay(
+    request: RelayExecuteRequest,
+    options?: RelayExecutionOptions
+  ): Promise<ValidationResult> {
     return tracer.startActiveSpan('relayer.validate', async (span): Promise<ValidationResult> => {
       span.setAttribute('session_key_id', request.sessionKey);
       span.setAttribute('nonce', request.nonce);
@@ -91,7 +95,8 @@ export class RelayService implements RelayServiceContract {
           }
         }
 
-        const payload = this.canonicalPayload(request);
+        const signedNonce = options?.signedNonce ?? request.nonce;
+        const payload = this.canonicalPayload({ ...request, nonce: signedNonce });
 
         try {
           const targetContract = request.parameters.accountAddress as string;
@@ -167,8 +172,11 @@ export class RelayService implements RelayServiceContract {
     });
   }
 
-  async executeRelay(request: RelayExecuteRequest): Promise<RelayExecuteResponse> {
-    const validation = await this.validateRelay(request);
+  async executeRelay(
+    request: RelayExecuteRequest,
+    options?: RelayExecutionOptions
+  ): Promise<RelayExecuteResponse> {
+    const validation = await this.validateRelay(request, options);
     if (!validation.valid || validation.requiresStepUp) {
       return {
         success: false,

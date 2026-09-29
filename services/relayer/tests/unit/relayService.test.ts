@@ -226,6 +226,28 @@ describe('RelayService', () => {
       expect(confirmed.success).toBe(true);
     });
 
+    it('tracks a fresh nonce while verifying the originally signed nonce', async () => {
+      const nonceStore = new MemoryNonceStore();
+      const verify = jest.fn().mockReturnValue(true);
+      const svc = new RelayService(
+        { verify },
+        undefined,
+        undefined,
+        undefined,
+        { useMockSubmission: true },
+        nonceStore
+      );
+
+      const result = await svc.executeRelay(makeRequest({ nonce: 8 }), { signedNonce: 1 });
+
+      expect(result.success).toBe(true);
+      const payload = verify.mock.calls[0]?.[1] as string;
+      const parsed = JSON.parse(Buffer.from(payload, 'hex').toString('utf8')) as { nonce: number };
+      expect(parsed.nonce).toBe(1);
+      expect(() => nonceStore.assertFresh(VALID_KEY, 8)).toThrow('Nonce already used');
+      expect(() => nonceStore.assertFresh(VALID_KEY, 1)).not.toThrow();
+    });
+
     it('returns network transaction hash from submitter on valid request', async () => {
       const submitter = makeSubmitter();
       const svc = new RelayService(makeSignatureService(true), undefined, undefined, submitter);
