@@ -23,6 +23,7 @@
 //! - `executed`: Emitted when a transaction is executed with to, function, and nonce
 //! - `session_key_added`: Emitted when a session key is added with public_key and expires_at
 //! - `session_key_revoked`: Emitted when a session key is revoked with public_key
+//! - `session_key_refreshed`: Emitted when a session key TTL is extended with public_key and new_expires_at
 //! - `allowed_contracts_set`: Emitted when allowed contracts are updated for a session key
 //! - `module_registered`: Emitted when a validation module is registered
 //! - `module_unregistered`: Emitted when a validation module is unregistered
@@ -118,6 +119,12 @@ mod events {
     /// Data: (public_key: BytesN<32>, expires_at: u64)
     pub fn session_key_ttl_refreshed(env: &Env) -> Symbol {
         Symbol::new(env, "session_key_ttl_refreshed")
+    }
+
+    /// Event emitted when `refresh_session_key_ttl` extends a session key.
+    /// Data: (public_key: BytesN<32>, new_expires_at: u64)
+    pub fn session_key_refreshed(env: &Env) -> Symbol {
+        Symbol::new(env, "session_key_refreshed")
     }
 
     /// Event emitted when an owner is added.
@@ -1004,6 +1011,12 @@ impl AncoreAccount {
         // Issue #195: Emit event on session key TTL refresh
         env.events().publish(
             (events::session_key_ttl_refreshed(&env),),
+            (public_key.clone(), normalized_expiry),
+        );
+
+        // Issue #1555: indexers track the updated expiry under this topic.
+        env.events().publish(
+            (events::session_key_refreshed(&env),),
             (public_key, normalized_expiry),
         );
 
@@ -1625,6 +1638,52 @@ mod test {
 
         let session_key = client.get_session_key(&session_pk);
         assert!(session_key.is_some());
+    }
+
+    #[test]
+    fn test_refresh_session_key_ttl_emits_session_key_refreshed() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, AncoreAccount);
+        let client = AncoreAccountClient::new(&env, &contract_id);
+
+        let owner = Address::generate(&env);
+        init(&env, &client, &owner);
+
+        env.mock_all_auths();
+
+        let session_pk = BytesN::from_array(&env, &[1u8; 32]);
+        let expires_at = env.ledger().timestamp() + 10000;
+        let permissions = Vec::new(&env);
+
+        client.add_session_key(
+            &session_pk,
+            &expires_at,
+            &permissions,
+            &None,
+            &None,
+            &None,
+            &0u64,
+        );
+        client.refresh_session_key_ttl(&session_pk);
+
+        let events_list = env.events().all();
+        let mut found = false;
+        for index in 0..events_list.len() {
+            let (_contract, topics, data) = events_list.get_unchecked(index).clone();
+            if topics.len() != 1 {
+                continue;
+            }
+            let topic_symbol: soroban_sdk::Symbol =
+                soroban_sdk::FromVal::from_val(&env, &topics.get_unchecked(0));
+            if topic_symbol != events::session_key_refreshed(&env) {
+                continue;
+            }
+            let data_tuple: (BytesN<32>, u64) = soroban_sdk::FromVal::from_val(&env, &data);
+            assert_eq!(data_tuple.0, session_pk);
+            assert_eq!(data_tuple.1, expires_at);
+            found = true;
+        }
+        assert!(found, "session_key_refreshed event was not emitted");
     }
 
     #[test]
