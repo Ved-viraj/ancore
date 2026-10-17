@@ -462,6 +462,28 @@ impl AncoreAccount {
         Ok(result)
     }
 
+    /// Reject empty or all-zero addresses in a session-key allowlist.
+    fn reject_zero_allowed_contracts(
+        allowed_contracts: &Option<Vec<Address>>,
+    ) -> Result<(), ContractError> {
+        let Some(list) = allowed_contracts else {
+            return Ok(());
+        };
+        for address in list.iter() {
+            let key = address.to_string();
+            let len = key.len() as usize;
+            if len == 0 || len > 56 {
+                return Err(ContractError::InsufficientPermission);
+            }
+            let mut buf = [0u8; 56];
+            key.copy_into_slice(&mut buf[..len]);
+            let strkey = core::str::from_utf8(&buf[..len])
+                .map_err(|_| ContractError::InsufficientPermission)?;
+            validation::validate_allowed_contract_address(strkey)?;
+        }
+        Ok(())
+    }
+
     /// Add a session key
     pub fn add_session_key(
         env: Env,
@@ -497,6 +519,7 @@ impl AncoreAccount {
             permission_len += 1;
         }
         validation::validate_permissions(&permission_buf[..permission_len])?;
+        Self::reject_zero_allowed_contracts(&allowed_contracts)?;
 
         if env
             .storage()
@@ -585,6 +608,7 @@ impl AncoreAccount {
         let mut session_key = Self::get_session_key(env.clone(), public_key.clone())
             .ok_or(ContractError::SessionKeyNotFound)?;
 
+        Self::reject_zero_allowed_contracts(&allowed_contracts)?;
         session_key.allowed_contracts = allowed_contracts.clone();
 
         env.storage()
@@ -2134,6 +2158,106 @@ mod test {
             result,
             Err(Ok(ContractError::InsufficientPermission))
         ));
+    }
+
+    fn zero_contract_address(env: &Env) -> Address {
+        use soroban_sdk::xdr::{Hash, ScAddress};
+        Address::try_from_val(env, &ScAddress::Contract(Hash([0u8; 32]))).unwrap()
+    }
+
+    #[test]
+    fn test_add_session_key_rejects_zero_allowed_contract() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, AncoreAccount);
+        let client = AncoreAccountClient::new(&env, &contract_id);
+
+        let owner = Address::generate(&env);
+        init(&env, &client, &owner);
+        env.mock_all_auths();
+
+        let zero = zero_contract_address(&env);
+        let mut zero_buf = [0u8; 56];
+        let zero_key = zero.to_string();
+        assert_eq!(zero_key.len(), 56);
+        zero_key.copy_into_slice(&mut zero_buf);
+        assert_eq!(
+            core::str::from_utf8(&zero_buf).unwrap(),
+            validation::ZERO_CONTRACT_STRKEY
+        );
+
+        let session_pk = BytesN::from_array(&env, &[4u8; 32]);
+        let expires_at = 9999999999u64;
+        let mut permissions = Vec::new(&env);
+        permissions.push_back(PERMISSION_EXECUTE);
+        let mut allowed = Vec::new(&env);
+        allowed.push_back(zero);
+
+        let rejected = client.try_add_session_key(
+            &session_pk,
+            &expires_at,
+            &permissions,
+            &Some(allowed),
+            &None,
+            &None,
+            &0u64,
+        );
+        assert!(matches!(
+            rejected,
+            Err(Ok(ContractError::InsufficientPermission))
+        ));
+
+        let valid = Address::generate(&env);
+        let mut valid_list = Vec::new(&env);
+        valid_list.push_back(valid);
+        client.add_session_key(
+            &session_pk,
+            &expires_at,
+            &permissions,
+            &Some(valid_list),
+            &None,
+            &None,
+            &0u64,
+        );
+        let stored = client.get_session_key(&session_pk).unwrap();
+        assert_eq!(stored.allowed_contracts.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_set_allowed_contracts_rejects_zero_address() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, AncoreAccount);
+        let client = AncoreAccountClient::new(&env, &contract_id);
+
+        let owner = Address::generate(&env);
+        init(&env, &client, &owner);
+        env.mock_all_auths();
+
+        let session_pk = BytesN::from_array(&env, &[5u8; 32]);
+        let expires_at = 9999999999u64;
+        let mut permissions = Vec::new(&env);
+        permissions.push_back(PERMISSION_EXECUTE);
+        client.add_session_key(
+            &session_pk,
+            &expires_at,
+            &permissions,
+            &None,
+            &None,
+            &None,
+            &0u64,
+        );
+
+        let mut allowed = Vec::new(&env);
+        allowed.push_back(zero_contract_address(&env));
+        let rejected = client.try_set_allowed_contracts(&session_pk, &Some(allowed));
+        assert!(matches!(
+            rejected,
+            Err(Ok(ContractError::InsufficientPermission))
+        ));
+        assert!(client
+            .get_session_key(&session_pk)
+            .unwrap()
+            .allowed_contracts
+            .is_none());
     }
 
     #[test]
